@@ -151,6 +151,53 @@ $message = $update["message"] ?? [];
 $from_id = $message["from"]["id"] ?? null;
 $from_name = $message["from"]["first_name"] ?? "ناشناس";
 
+$required_channel = "@StarHideChat"; // یوزرنیم کانال (با @)
+
+// تابع چک عضویت
+function isUserInChannel($user_id, $channel) {
+    global $token;
+    $url = "https://api.telegram.org/bot$token/getChatMember?chat_id=$channel&user_id=$user_id";
+    $res = json_decode(file_get_contents($url), true);
+
+    if ($res["ok"]) {
+        $status = $res["result"]["status"];
+        return !in_array($status, ["left", "kicked"]);
+    }
+    return false;
+}
+
+// هندل دکمه‌ی "عضویت زدم"
+if (isset($update["callback_query"])) {
+    $callback = $update["callback_query"];
+    $from_id = $callback["from"]["id"];
+    $data = $callback["data"];
+
+    if ($data === "check_join") {
+        if (isUserInChannel($from_id, $required_channel)) {
+            sendContent($from_id, "text", "✅ عضویتت تایید شد! حالا می‌تونی از ربات استفاده کنی.");
+        } else {
+            $keyboard = [
+                "inline_keyboard" => [
+                    [["text" => "🔗 عضویت در کانال", "url" => "https://t.me/StarHideChat"]],
+                ]
+            ];
+            sendContent($from_id, "text", "⛔ هنوز عضو کانال نیستی! لطفاً اول عضو شو:", $keyboard);
+        }
+        exit;
+    }
+}
+
+// چک عضویت اولیه
+if (!isUserInChannel($from_id, $required_channel)) {
+    $keyboard = [
+        "inline_keyboard" => [
+            [["text" => "🔗 عضویت در کانال", "url" => "https://t.me/StarHideChat"]],
+        ]
+    ];
+    sendContent($from_id, "text", "⛔ برای استفاده از ربات باید توی کانال ما عضو بشی: \n برای بررسی عضویت /start رو بزن!", $keyboard);
+    exit;
+}
+
 if (in_array($from_id, $blockedUsers)) {
     exit; 
 }
