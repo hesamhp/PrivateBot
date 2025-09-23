@@ -7,6 +7,11 @@ $dataDir = "data";
 $pvTargetsDir = "$dataDir/pv_targets";
 $usersDir = "$dataDir/users";
 
+if (isset($_GET['id']) && is_numeric($_GET['id'])) {
+    $id = $_GET['id'];
+    header("Location: web.php?=$id");
+    exit;
+}
 if (!file_exists($dataDir)) {
     mkdir($dataDir, 0755, true);
 }
@@ -29,7 +34,7 @@ if (isset($update["callback_query"])) {
     $data = $callback["data"];
 
     if (in_array($from_id, $blockedUsers)) {
-        exit; 
+        exit;
     }
 
     if ($data === "contact_admin") {
@@ -109,7 +114,7 @@ if (isset($update["callback_query"])) {
     }
 
     if (strpos($data, "blockuser_") === 0) {
-        $target_id = str_replace("blockuser_", "", $data); 
+        $target_id = str_replace("blockuser_", "", $data);
         $blocker_id = $from_id;
 
         $userBlockFile = "$usersDir/$blocker_id/blocked_list.json";
@@ -151,10 +156,24 @@ $message = $update["message"] ?? [];
 $from_id = $message["from"]["id"] ?? null;
 $from_name = $message["from"]["first_name"] ?? "ناشناس";
 
+// --- ذخیره نام کاربر در name.json (در اولین پیام /start) ---
+if (isset($message["text"]) && strpos($message["text"], "/start") === 0) {
+    $namesFile = "$dataDir/name.json";
+    $names = file_exists($namesFile) ? json_decode(file_get_contents($namesFile), true) : [];
+    if ($from_id && $from_name) {
+        if (!isset($names[$from_id])) {
+            $names[$from_id] = $from_name;
+            file_put_contents($namesFile, json_encode($names, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        }
+    }
+}
+
+
 $required_channel = "@StarHideChat"; // یوزرنیم کانال (با @)
 
 // تابع چک عضویت
-function isUserInChannel($user_id, $channel) {
+function isUserInChannel($user_id, $channel)
+{
     global $token;
     $url = "https://api.telegram.org/bot$token/getChatMember?chat_id=$channel&user_id=$user_id";
     $res = json_decode(file_get_contents($url), true);
@@ -199,7 +218,7 @@ if (!isUserInChannel($from_id, $required_channel)) {
 }
 
 if (in_array($from_id, $blockedUsers)) {
-    exit; 
+    exit;
 }
 
 if (isset($message["text"])) {
@@ -247,7 +266,7 @@ if (!in_array($from_id, $users)) {
     ensureUserDirectory($from_id, $usersDir);
 }
 
-if ($msg_type !== 'sticker') { 
+if ($msg_type !== 'sticker') {
     ensureUserDirectory($from_id, $usersDir);
     $userDir = "$usersDir/$from_id";
     switch ($msg_type) {
@@ -299,7 +318,8 @@ if ($msg_type !== 'sticker') {
     }
 }
 // بارگذاری یک فایل JSON با مقدار پیش‌فرض
-function loadJsonFile($path, $default = []) {
+function loadJsonFile($path, $default = [])
+{
     if (file_exists($path)) {
         $data = json_decode(file_get_contents($path), true);
         return is_array($data) ? $data : $default;
@@ -308,7 +328,7 @@ function loadJsonFile($path, $default = []) {
 }
 
 if (isset($content) && strpos($content, "/start") === 0) {
-    $parts = explode(" ", $content);
+    $parts = explode(" ", $content); // $parts[0] = "/start"
     $userBlockFile = "$usersDir/$from_id/blocked_list.json";
     $keyboard = [
         'inline_keyboard' => [
@@ -322,57 +342,197 @@ if (isset($content) && strpos($content, "/start") === 0) {
         }
     }
 
-    if (count($parts) > 1) {
-        $target_id = $parts[1];
-        if (is_numeric($target_id)) {
+    if (isset($parts[1])) {
+        if ($parts[1] === "weblink") {
+            // دستور /weblink اجرا شود
+            ensureUserDirectory($from_id, $usersDir);
+            $userDir = "$usersDir/$from_id";
+
+            // --- ذخیره آخرین عکس پروفایل کاربر (یا حذف در صورت نبود عکس) ---
+            try {
+                $photosData = json_decode(file_get_contents("https://api.telegram.org/bot$token/getUserProfilePhotos?user_id=$from_id&limit=1"), true);
+                $profilePath = "$userDir/profile.jpg";
+                if ($photosData["ok"] && $photosData["result"]["total_count"] > 0) {
+                    $photoArray = end($photosData["result"]["photos"][0]);
+                    $file_id = $photoArray["file_id"];
+                    $fileUrl = getFileLink($file_id);
+                    if ($fileUrl) {
+                        file_put_contents($profilePath, file_get_contents($fileUrl));
+                    }
+                } else {
+                    // اگر عکس پروفایل وجود ندارد، عکس قبلی را حذف کن
+                    if (file_exists($profilePath)) {
+                        unlink($profilePath);
+                    }
+                }
+            } catch (Exception $e) {
+                // نادیده گرفتن خطا
+            }
+
+            // ساخت لینک و QR
+            $weblink = "https://hesvm.ir/pv/web.php?id=$from_id";
+
+            // مسیر تصویر طراحی شده
+            $designPath = "data/assets/qr.jpg";
+
+            // بارگذاری تصویر طراحی شده
+            if (file_exists($designPath)) {
+                $background = imagecreatefromjpeg($designPath); // اگر PNG بود: imagecreatefrompng
+            } else {
+                // fallback اگر تصویر موجود نبود
+                $background = imagecreatetruecolor(1080, 1080);
+                $white = imagecolorallocate($background, 255, 255, 255);
+                imagefill($background, 0, 0, $white);
+            }
+
+            // تولید QR Code
+            $qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=" . urlencode($weblink);
+            $qrImage = imagecreatefrompng($qrUrl);
+
+            // اندازه QR و پس‌زمینه
+            $qrWidth = imagesx($qrImage);
+            $qrHeight = imagesy($qrImage);
+            $bgWidth = imagesx($background);
+            $bgHeight = imagesy($background);
+
+            // قرار دادن QR در وسط تصویر طراحی شده
+            $destX = ($bgWidth - $qrWidth) / 2;
+            $destY = ($bgHeight - $qrHeight) / 2;
+            imagecopy($background, $qrImage, $destX, $destY, 0, 0, $qrWidth, $qrHeight);
+
+            // ذخیره تصویر نهایی موقت در فایل temp
+            $tempFile = tempnam(sys_get_temp_dir(), 'qr_') . '.png';
+            imagepng($background, $tempFile);
+
+            // آزادسازی حافظه
+            imagedestroy($background);
+            imagedestroy($qrImage);
+
+            $text = "✨ لینک اختصاصی تو برای دریافت پیام ناشناس از وب:\n\n$weblink\n\nمی‌تونی این لینک رو به دوستات بدی تا برات پیام ناشناس بفرستن. همچنین از طریق این QR هم امکان پذیره:\n";
+
+            // ارسال تصویر نهایی به کاربر با cURL
+            sendPhotoFile($from_id, $tempFile);
+            sendContent($from_id, "text", $text);
+
+            // حذف فایل موقت
+            if (file_exists($tempFile)) unlink($tempFile);
+            exit;
+        } elseif (is_numeric($parts[1])) {
+            // سیستم پیام ناشناس به کاربر با id مشخص
+            $target_id = $parts[1];
+
             if ($target_id == $from_id) {
                 sendContent($from_id, "text", "✨ این لینک خودته! می‌تونی اینو به بقیه بدی تا برات پیام ناشناس بفرستن 😎", $keyboard);
-
                 $targetFile = "$pvTargetsDir/pv_target_$from_id.txt";
-                if (file_exists($targetFile)) {
-                    unlink($targetFile);
-                }
+                if (file_exists($targetFile)) unlink($targetFile);
                 exit;
             }
+
             $chat_info = getUserName($target_id);
             if ($chat_info !== "کاربر ناشناس") {
                 file_put_contents("$pvTargetsDir/pv_target_$from_id.txt", $target_id);
                 $text = "سلام $from_name 👋\n\nتو می‌تونی به $chat_info پیام ناشناس بدی. پیامت رو بفرست تا براش ارسال شه.";
                 sendContent($from_id, "text", $text, $keyboard);
-
-                $targetFile = "$pvTargetsDir/pv_target_$from_id.txt";
-                if (file_exists($targetFile)) {
-                }
                 exit;
             } else {
                 sendContent($from_id, "text", "❌ کاربر مورد نظر پیدا نشد یا نامعتبر است.", $keyboard);
-
                 $targetFile = "$pvTargetsDir/pv_target_$from_id.txt";
-                if (file_exists($targetFile)) {
-                    unlink($targetFile);
-                }
+                if (file_exists($targetFile)) unlink($targetFile);
                 exit;
             }
         } else {
             sendContent($from_id, "text", "❌ شناسه کاربر نامعتبر است.", $keyboard);
-
             $targetFile = "$pvTargetsDir/pv_target_$from_id.txt";
-            if (file_exists($targetFile)) {
-                unlink($targetFile);
-            }
+            if (file_exists($targetFile)) unlink($targetFile);
             exit;
         }
     } else {
+        // /start معمولی بدون پارامتر
         $text = "سلام $from_name 👋\n\nتو الان توی ربات پیام ناشناس عضو شدی.\n\nبرای ارسال پیام ناشناس به کسی، لینک مخصوص اون رو بزن.\n\nلینک مخصوص تو:\nt.me/$botid?start=$from_id";
         sendContent($from_id, "text", $text, $keyboard);
-
         $targetFile = "$pvTargetsDir/pv_target_$from_id.txt";
-        if (file_exists($targetFile)) {
-            unlink($targetFile);
-        }
+        if (file_exists($targetFile)) unlink($targetFile);
         exit;
     }
 }
+
+if (isset($content) && trim($content) === "/weblink") {
+    // اطمینان از وجود دایرکتوری کاربر
+    ensureUserDirectory($from_id, $usersDir);
+    $userDir = "$usersDir/$from_id";
+
+    // --- ذخیره آخرین عکس پروفایل کاربر (یا حذف در صورت نبود عکس) ---
+    try {
+        $photosData = json_decode(file_get_contents("https://api.telegram.org/bot$token/getUserProfilePhotos?user_id=$from_id&limit=1"), true);
+        $profilePath = "$userDir/profile.jpg";
+        if ($photosData["ok"] && $photosData["result"]["total_count"] > 0) {
+            $photoArray = end($photosData["result"]["photos"][0]);
+            $file_id = $photoArray["file_id"];
+            $fileUrl = getFileLink($file_id);
+            if ($fileUrl) {
+                file_put_contents($profilePath, file_get_contents($fileUrl));
+            }
+        } else {
+            // اگر عکس پروفایل وجود ندارد، عکس قبلی را حذف کن
+            if (file_exists($profilePath)) {
+                unlink($profilePath);
+            }
+        }
+    } catch (Exception $e) {
+        // نادیده گرفتن خطا
+    }
+
+    // ساخت لینک و QR و قرار دادن QR روی تصویر طراحی شده
+    $weblink = "https://hesvm.ir/pv/web.php?id=$from_id";
+
+    // مسیر تصویر طراحی شده
+    $designPath = "data/assets/qr.jpg";
+
+    // بارگذاری تصویر طراحی شده
+    if (file_exists($designPath)) {
+        $background = imagecreatefromjpeg($designPath); // اگر PNG بود: imagecreatefrompng
+    } else {
+        // fallback اگر تصویر موجود نبود
+        $background = imagecreatetruecolor(1080, 1080);
+        $white = imagecolorallocate($background, 255, 255, 255);
+        imagefill($background, 0, 0, $white);
+    }
+
+    // تولید QR Code
+    $qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=" . urlencode($weblink);
+    $qrImage = imagecreatefrompng($qrUrl);
+
+    // اندازه QR و پس‌زمینه
+    $qrWidth = imagesx($qrImage);
+    $qrHeight = imagesy($qrImage);
+    $bgWidth = imagesx($background);
+    $bgHeight = imagesy($background);
+
+    // قرار دادن QR در وسط تصویر طراحی شده
+    $destX = ($bgWidth - $qrWidth) / 2;
+    $destY = ($bgHeight - $qrHeight) / 2;
+    imagecopy($background, $qrImage, $destX, $destY, 0, 0, $qrWidth, $qrHeight);
+
+    // ذخیره تصویر نهایی موقت در فایل temp
+    $tempFile = tempnam(sys_get_temp_dir(), 'qr_') . '.png';
+    imagepng($background, $tempFile);
+
+    // آزادسازی حافظه
+    imagedestroy($background);
+    imagedestroy($qrImage);
+
+    $text = "✨ لینک اختصاصی تو برای دریافت پیام ناشناس از وب:\n\n$weblink\n\nمی‌تونی این لینک رو به دوستات بدی تا برات پیام ناشناس بفرستن. همچنین از طریق این QR هم امکان پذیره:\n";
+
+    // ارسال تصویر نهایی به کاربر با cURL
+    sendPhotoFile($from_id, $tempFile);
+    sendContent($from_id, "text", $text);
+
+    // حذف فایل موقت
+    if (file_exists($tempFile)) unlink($tempFile);
+
+    exit;
+}
+
 
 if (isset($content) && trim($content) === "/link") {
     $text = "لینک اختصاصی تو برای ارسال پیام ناشناس بهت:\n\nt.me/$botid?start=$from_id";
@@ -419,8 +579,7 @@ if ($from_id == $admin_id && trim($content) === "/panel") {
     ];
     sendContent($from_id, "text", "به پنل ادمین خوش اومدی 👨‍💻", $keyboard);
     exit;
-}
-elseif (isset($content) && strpos($content, "/send ") === 0) {
+} elseif (isset($content) && strpos($content, "/send ") === 0) {
     $parts = explode(" ", $content, 3);
     if (count($parts) < 3) {
         sendContent($from_id, "text", "❌ فرمت درست نیست. مثل این بفرست:\n/send 123456789 سلام!");
@@ -445,8 +604,7 @@ elseif (isset($content) && strpos($content, "/send ") === 0) {
     ];
     sendContent($to_id, "text", "📩 یک پیام ناشناس برات اومده:\n\n$msg_body", $keyboard);
     sendContent($from_id, "text", "✅ پیامت با موفقیت ارسال شد!");
-}
-elseif (isset($content) && strpos($content, "/reply ") === 0) {
+} elseif (isset($content) && strpos($content, "/reply ") === 0) {
     $parts = explode(" ", $content, 3);
     if (count($parts) < 3) {
         sendContent($from_id, "text", "❌ فرمت درست نیست. مثل این بفرست:\n/reply 123456789 مرسی از پیامت!");
@@ -538,7 +696,8 @@ else {
     }
 }
 
-function getUserName($user_id) {
+function getUserName($user_id)
+{
     global $token;
     $url = "https://api.telegram.org/bot$token/getChat?chat_id=$user_id";
     $res = json_decode(file_get_contents($url), true);
@@ -549,7 +708,8 @@ function getUserName($user_id) {
     }
 }
 
-function sendContent($chat_id, $msg_type, $content, $keyboard = null) {
+function sendContent($chat_id, $msg_type, $content, $keyboard = null)
+{
     global $token;
     $url_base = "https://api.telegram.org/bot$token/";
     $data = ['chat_id' => $chat_id];
@@ -611,7 +771,8 @@ function sendContent($chat_id, $msg_type, $content, $keyboard = null) {
     return true;
 }
 
-function createUserDataDirs($userDir) {
+function createUserDataDirs($userDir)
+{
     $subDirs = ['pic', 'video', 'voice', 'document', 'animation', 'audio', 'video_note'];
     foreach ($subDirs as $dir) {
         $path = "$userDir/$dir";
@@ -625,7 +786,8 @@ function createUserDataDirs($userDir) {
     }
 }
 
-function getFileLink($file_id) {
+function getFileLink($file_id)
+{
     global $token;
     $url = "https://api.telegram.org/bot$token/getFile?file_id=$file_id";
     $res = json_decode(file_get_contents($url), true);
@@ -636,7 +798,8 @@ function getFileLink($file_id) {
     return false;
 }
 
-function saveFileFromTelegram($file_id, $savePath) {
+function saveFileFromTelegram($file_id, $savePath)
+{
     $fileUrl = getFileLink($file_id);
     if ($fileUrl) {
         $fileContents = file_get_contents($fileUrl);
@@ -648,11 +811,28 @@ function saveFileFromTelegram($file_id, $savePath) {
     return false;
 }
 // اطمینان از وجود دایرکتوری و ساختار کاربر
-function ensureUserDirectory($user_id, $usersDir) {
+function ensureUserDirectory($user_id, $usersDir)
+{
     $userDir = "$usersDir/$user_id";
     if (!file_exists($userDir)) {
         mkdir($userDir, 0755, true);
     }
     createUserDataDirs($userDir);
 }
-?>
+
+// ارسال عکس با cURL جهت جلوگیری از خطای 400
+function sendPhotoFile($chat_id, $filePath, $caption = null) {
+    global $token;
+    $url = "https://api.telegram.org/bot$token/sendPhoto";
+    $postFields = ['chat_id' => $chat_id, 'photo' => new CURLFile($filePath)];
+    if ($caption) $postFields['caption'] = $caption;
+
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type:multipart/form-data"]);
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
+    $result = curl_exec($ch);
+    curl_close($ch);
+    return $result;
+}
