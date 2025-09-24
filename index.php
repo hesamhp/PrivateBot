@@ -398,8 +398,8 @@ if (isset($content) && strpos($content, "/start") === 0) {
             }
 
             // تغییر سایز پروفایل (مثلاً 350px به جای 300px)
-            $finalProfileWidth = 350;
-            $finalProfileHeight = 350;
+            $finalProfileWidth = 300;
+            $finalProfileHeight = 300;
             $profileResized = imagecreatetruecolor($finalProfileWidth, $finalProfileHeight);
             imagesavealpha($profileResized, true);
             $trans_color = imagecolorallocatealpha($profileResized, 0, 0, 0, 127);
@@ -420,12 +420,12 @@ if (isset($content) && strpos($content, "/start") === 0) {
 
             // پروفایل وسط تصویر و پایین‌تر (مثلاً Y = 300px به جای 250px)
             $profileX = ($bgWidth - $finalProfileWidth) / 2;
-            $profileY = 300; // پایین‌تر
+            $profileY = 400; // پایین‌تر
             imagecopy($background, $profileResized, $profileX, $profileY, 0, 0, $finalProfileWidth, $finalProfileHeight);
 
             // QR پایین پروفایل
             $qrX = ($bgWidth - $qrWidth) / 2;
-            $qrY = $profileY + $finalProfileHeight + 30;
+            $qrY = $profileY + $finalProfileHeight + 200;
             imagecopy($background, $qrImage, $qrX, $qrY, 0, 0, $qrWidth, $qrHeight);
 
             // ذخیره موقت و ارسال
