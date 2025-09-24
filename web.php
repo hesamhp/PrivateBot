@@ -2,7 +2,7 @@
 session_start();
 
 // تنظیم محدودیت زمان ارسال (به ثانیه)
-$limitTime = 0;
+$limitTime = 30;
 
 // گرفتن شناسه کاربر مقصد از URL
 $from_id = $_GET['id'] ?? null;
@@ -11,11 +11,13 @@ if (!$from_id || !is_numeric($from_id)) {
     die("شناسه نامعتبر است.");
 }
 
-// بررسی محدودیت تایم
+// محدودیت تایم: شمارنده و پیام خطا (در فرم نمایش داده شود)
+$timeLeft = 0;
 if (isset($_SESSION["last_sent_$from_id"])) {
     $diff = time() - $_SESSION["last_sent_$from_id"];
     if ($diff < $limitTime) {
-        die("⏳ لطفاً کمی صبر کنید و دوباره تلاش کنید. حداقل فاصله بین ارسال‌ها $limitTime ثانیه است.");
+        $timeLeft = $limitTime - $diff;
+        $error = "⏳ لطفاً صبر کنید تا ارسال بعدی فعال شود. ($timeLeft ثانیه باقی مانده)";
     }
 }
 
@@ -24,6 +26,20 @@ $namesFile = __DIR__ . "/data/name.json";
 $names = file_exists($namesFile) ? json_decode(file_get_contents($namesFile), true) : [];
 $displayName = $names[$from_id] ?? $from_id;
 $defaultNameValue = $names[$from_id] ?? '';
+
+// بررسی وجود پوشه کاربر قبل از نمایش فرم
+$userDir = __DIR__ . "/data/users/$from_id";
+if (!is_dir($userDir)) {
+    echo '<body style="margin:0; padding:0; background:#5563DE; font-family:\'Kalameh\', sans-serif; display:flex; justify-content:center; align-items:center; min-height:100vh;">';
+    echo '<div class="container" style="background:#fff; padding:30px 20px; border-radius:15px; box-shadow:0 15px 40px rgba(0,0,0,0.2); width:90%; max-width:450px; text-align:center;">';
+    echo '<div class="error-box" style="display:flex; align-items:center; justify-content:center; color:#721c24; font-weight:bold; font-size:16px;">';
+    echo '<i class="fas fa-times-circle" style="margin-right:8px;"></i>';
+    echo '<span>❌ کاربر مورد نظر موجود نیست.</span>';
+    echo '</div>';
+    echo '</div>';
+    echo '</body>';
+    exit;
+}
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     $_SESSION['captcha_a'] = rand(1, 9);
@@ -38,7 +54,6 @@ $_SESSION['page_loaded'] = true;
 
 // اگر فرم ارسال شد
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $name = trim($_POST['name'] ?? '');
     $message = trim($_POST['message'] ?? '');
     $captcha = trim($_POST['captcha'] ?? '');
 
@@ -51,12 +66,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pvDir = __DIR__ . "/data/pv_targets";
         if (!file_exists($pvDir)) mkdir($pvDir, 0755, true);
 
-        $finalMessage = $name ? "[$name]: $message" : $message;
+        $finalMessage = $message;
         file_put_contents("$pvDir/pv_target_$from_id.txt", $finalMessage);
 
         // ارسال پیام اطلاع‌رسانی به کاربر مقصد
         $telegramToken = "7639538621:AAFmF1ac7iecNPgDSuWCtQDxCVRfq3nvTtI"; // توکن ربات
-        $sendName = $name ? $name : "ناشناس";
+        $sendName = "ناشناس";
         $notifyText = "📩 پیام جدید از طریق سایت ثبت شد.\n";
         $notifyText .= "فرستنده: $sendName\n";
         $notifyText .= "پیام: $message";
@@ -86,13 +101,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $_SESSION["last_sent_$from_id"] = time();
 
-        // ذخیره نام کاربر در name.json
-        if ($name) {
-            $names[$from_id] = $name;
-            file_put_contents($namesFile, json_encode($names, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-            $displayName = $name; // بروزرسانی نام برای نمایش در همان صفحه
-        }
-
         // بازنشانی اعداد کپچا پس از ارسال موفقیت‌آمیز
         unset($_SESSION['captcha_a'], $_SESSION['captcha_b']);
 
@@ -118,6 +126,7 @@ if (isset($_SESSION['success_msg'])) {
 <head>
     <meta charset="UTF-8">
     <title>ارسال پیام ناشناس به <?php echo htmlspecialchars($displayName); ?></title>
+    <link rel="icon" href="https://hesvm.ir/pv/data/assets/logo.ico" type="image/x-icon">
     <style>
         @font-face {
             font-family: 'Kalameh';
@@ -130,7 +139,7 @@ if (isset($_SESSION['success_msg'])) {
             margin: 0;
             padding: 0;
             font-family: 'Kalameh', sans-serif;
-            background: linear-gradient(135deg, #74ABE2, #5563DE);
+            background: #5563DE; /* تغییر به بنفش */
             display: flex;
             justify-content: center;
             align-items: flex-start;
@@ -228,7 +237,7 @@ if (isset($_SESSION['success_msg'])) {
             body {
                 margin: 0;
                 padding: 0;
-                background: #fff; /* حذف گرادینت بنفش */
+                background: #5563DE; /* موبایل هم بنفش */
                 display: block;
                 min-height: 100vh;
                 box-sizing: border-box;
@@ -454,18 +463,22 @@ if (isset($_SESSION['success_msg'])) {
     ?>
     <div class="container">
         <div style="text-align:center; margin-bottom:20px;">
-            <img id="profileImg" src="<?php echo $imageUrl; ?>" alt="تصویر" class="profile-img" style="opacity:0;">
+            <!-- تصویر جدید بالای پروفایل -->
+            <img src="https://hesvm.ir/pv/data/assets/header.jpg" alt="تصویر بالای پروفایل" style="width:250px; height:auto; margin-bottom:10px;" oncontextmenu="return false;" draggable="false">
+
+            <!-- تصویر پروفایل کاربر -->
+            <img id="profileImg" src="<?php echo $imageUrl; ?>" alt="تصویر" class="profile-img" style="opacity:0;" oncontextmenu="return false;" draggable="false">
         </div>
         <h2 style="margin-bottom:2px;">ارسال پیام ناشناس به</h2>
         <p style="color:#8000FF; font-size:28px; margin-top:0;"><?php echo htmlspecialchars($displayName); ?></p>
 
-        <?php if (isset($error) && !empty($error)) : ?>
+        <?php if (!empty($error)) : ?>
             <div class="error-box">
                 <i class="fas fa-times-circle"></i>
                 <span><?php echo $error; ?></span>
             </div>
         <?php endif; ?>
-        <?php if (isset($success) && !empty($success)) : ?>
+        <?php if (!empty($success)) : ?>
             <div class="success-box">
                 <i class="fas fa-check-circle"></i>
                 <span><?php echo $success; ?></span>
@@ -473,7 +486,7 @@ if (isset($_SESSION['success_msg'])) {
         <?php endif; ?>
 
         <form method="post">
-            <textarea name="message" placeholder="پیام خود را اینجا بنویسید..." rows="4" required class="message-box" maxlength="500"></textarea>
+            <textarea name="message" placeholder="پیام خود را اینجا بنویسید..." rows="4" required class="message-box" maxlength="500"><?php echo htmlspecialchars($_POST['message'] ?? ''); ?></textarea>
             <div style="background:#eee; border-radius:5px; height:8px; width:100%; margin:5px 0;">
                 <div id="progressBar" style="height:100%; width:0%; background:#5563DE; border-radius:5px;"></div>
             </div>
@@ -481,7 +494,7 @@ if (isset($_SESSION['success_msg'])) {
             <p>برای تایید، حاصل جمع <?php echo $captchaA; ?> + <?php echo $captchaB; ?> را وارد کنید:</p>
             <input type="number" name="captcha" required class="captcha-input">
             <div style="display:flex; justify-content:center;">
-                <button type="submit">
+                <button type="submit" id="sendBtn" <?php echo ($timeLeft > 0) ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : ''; ?>>
                     <span class="btn-text">ارسال پیام</span>
                     <i class="fas fa-paper-plane"></i>
                     <span class="spinner" style="display:none;"><i class="fas fa-spinner fa-spin"></i></span>
@@ -538,6 +551,24 @@ if (loader) {
         }, 2000);
     });
 }
+
+<?php if ($timeLeft > 0): ?>
+let timeLeft = <?php echo $timeLeft; ?>;
+const sendBtn = document.getElementById('sendBtn');
+const errorBox = document.querySelector('.error-box span');
+const countdown = setInterval(() => {
+    if (timeLeft <= 0) {
+        clearInterval(countdown);
+        sendBtn.disabled = false;
+        sendBtn.style.opacity = 1;
+        sendBtn.style.cursor = 'pointer';
+        if (errorBox) errorBox.textContent = '';
+    } else {
+        if (errorBox) errorBox.textContent = "⏳ لطفاً صبر کنید تا ارسال بعدی فعال شود. (" + timeLeft + " ثانیه باقی مانده)";
+        timeLeft--;
+    }
+}, 1000);
+<?php endif; ?>
 </script>
 
 </body>

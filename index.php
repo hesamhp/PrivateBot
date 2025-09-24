@@ -348,74 +348,98 @@ if (isset($content) && strpos($content, "/start") === 0) {
             ensureUserDirectory($from_id, $usersDir);
             $userDir = "$usersDir/$from_id";
 
-            // --- ذخیره آخرین عکس پروفایل کاربر (یا حذف در صورت نبود عکس) ---
+            // ذخیره آخرین عکس پروفایل با try-catch (بدون تغییر)
             try {
                 $photosData = json_decode(file_get_contents("https://api.telegram.org/bot$token/getUserProfilePhotos?user_id=$from_id&limit=1"), true);
-                $profilePath = "$userDir/profile.jpg";
                 if ($photosData["ok"] && $photosData["result"]["total_count"] > 0) {
                     $photoArray = end($photosData["result"]["photos"][0]);
                     $file_id = $photoArray["file_id"];
                     $fileUrl = getFileLink($file_id);
                     if ($fileUrl) {
-                        file_put_contents($profilePath, file_get_contents($fileUrl));
-                    }
-                } else {
-                    // اگر عکس پروفایل وجود ندارد، عکس قبلی را حذف کن
-                    if (file_exists($profilePath)) {
-                        unlink($profilePath);
+                        file_put_contents("$userDir/profile.jpg", file_get_contents($fileUrl));
                     }
                 }
-            } catch (Exception $e) {
-                // نادیده گرفتن خطا
-            }
+            } catch (Exception $e) {}
 
-            // ساخت لینک و QR
-            $weblink = "https://hesvm.ir/pv/web.php?id=$from_id";
-
+            // ساخت تصویر QR با پروفایل گرد بالا و QR پایین، ارسال مستقیم و حذف فایل موقت
             // مسیر تصویر طراحی شده
             $designPath = "data/assets/qr.jpg";
-
-            // بارگذاری تصویر طراحی شده
-            if (file_exists($designPath)) {
-                $background = imagecreatefromjpeg($designPath); // اگر PNG بود: imagecreatefrompng
-            } else {
-                // fallback اگر تصویر موجود نبود
-                $background = imagecreatetruecolor(1080, 1080);
+            $background = file_exists($designPath) ? imagecreatefromjpeg($designPath) : imagecreatetruecolor(1080, 1080);
+            if (!file_exists($designPath)) {
                 $white = imagecolorallocate($background, 255, 255, 255);
                 imagefill($background, 0, 0, $white);
             }
 
+            // بارگذاری تصویر پروفایل کاربر یا fallback
+            $userProfile = "$userDir/profile.jpg";
+            if (!file_exists($userProfile)) {
+                $userProfile = "data/assets/profile.jpg";
+            }
+            $ext = strtolower(pathinfo($userProfile, PATHINFO_EXTENSION));
+            $profileImg = ($ext === "png") ? imagecreatefrompng($userProfile) : imagecreatefromjpeg($userProfile);
+
+            // گرد کردن تصویر پروفایل
+            $profileWidth = imagesx($profileImg);
+            $profileHeight = imagesy($profileImg);
+            $size = min($profileWidth, $profileHeight);
+            $profileCircular = imagecreatetruecolor($size, $size);
+            imagesavealpha($profileCircular, true);
+            $trans_color = imagecolorallocatealpha($profileCircular, 0, 0, 0, 127);
+            imagefill($profileCircular, 0, 0, $trans_color);
+            for ($x = 0; $x < $size; $x++) {
+                for ($y = 0; $y < $size; $y++) {
+                    $dx = $x - $size/2;
+                    $dy = $y - $size/2;
+                    if (($dx*$dx + $dy*$dy) <= ($size/2)*($size/2)) {
+                        $color = imagecolorat($profileImg, $x, $y);
+                        imagesetpixel($profileCircular, $x, $y, $color);
+                    }
+                }
+            }
+
+            // تغییر سایز پروفایل (مثلاً 350px به جای 300px)
+            $finalProfileWidth = 350;
+            $finalProfileHeight = 350;
+            $profileResized = imagecreatetruecolor($finalProfileWidth, $finalProfileHeight);
+            imagesavealpha($profileResized, true);
+            $trans_color = imagecolorallocatealpha($profileResized, 0, 0, 0, 127);
+            imagefill($profileResized, 0, 0, $trans_color);
+            imagecopyresampled($profileResized, $profileCircular, 0, 0, 0, 0, $finalProfileWidth, $finalProfileHeight, $size, $size);
+            imagedestroy($profileCircular);
+
             // تولید QR Code
+            $weblink = "https://hesvm.ir/pv/web.php?id=$from_id";
             $qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=" . urlencode($weblink);
             $qrImage = imagecreatefrompng($qrUrl);
 
-            // اندازه QR و پس‌زمینه
-            $qrWidth = imagesx($qrImage);
-            $qrHeight = imagesy($qrImage);
+            // قرار دادن پروفایل و QR روی تصویر طراحی شده
             $bgWidth = imagesx($background);
             $bgHeight = imagesy($background);
+            $qrWidth = imagesx($qrImage);
+            $qrHeight = imagesy($qrImage);
 
-            // قرار دادن QR در وسط تصویر طراحی شده
-            $destX = ($bgWidth - $qrWidth) / 2;
-            $destY = ($bgHeight - $qrHeight) / 2;
-            imagecopy($background, $qrImage, $destX, $destY, 0, 0, $qrWidth, $qrHeight);
+            // پروفایل وسط تصویر و پایین‌تر (مثلاً Y = 300px به جای 250px)
+            $profileX = ($bgWidth - $finalProfileWidth) / 2;
+            $profileY = 300; // پایین‌تر
+            imagecopy($background, $profileResized, $profileX, $profileY, 0, 0, $finalProfileWidth, $finalProfileHeight);
 
-            // ذخیره تصویر نهایی موقت در فایل temp
+            // QR پایین پروفایل
+            $qrX = ($bgWidth - $qrWidth) / 2;
+            $qrY = $profileY + $finalProfileHeight + 30;
+            imagecopy($background, $qrImage, $qrX, $qrY, 0, 0, $qrWidth, $qrHeight);
+
+            // ذخیره موقت و ارسال
             $tempFile = tempnam(sys_get_temp_dir(), 'qr_') . '.png';
             imagepng($background, $tempFile);
-
-            // آزادسازی حافظه
             imagedestroy($background);
+            imagedestroy($profileResized);
+            imagedestroy($profileImg);
             imagedestroy($qrImage);
 
-            $text = "✨ لینک اختصاصی تو برای دریافت پیام ناشناس از وب:\n\n$weblink\n\nمی‌تونی این لینک رو به دوستات بدی تا برات پیام ناشناس بفرستن. همچنین از طریق این QR هم امکان پذیره:\n";
-
-            // ارسال تصویر نهایی به کاربر با cURL
+            $text = "✨ لینک اختصاصی تو برای دریافت پیام ناشناس:\n\n$weblink";
             sendPhotoFile($from_id, $tempFile);
             sendContent($from_id, "text", $text);
-
-            // حذف فایل موقت
-            if (file_exists($tempFile)) unlink($tempFile);
+            unlink($tempFile);
             exit;
         } elseif (is_numeric($parts[1])) {
             // سیستم پیام ناشناس به کاربر با id مشخص
@@ -448,7 +472,7 @@ if (isset($content) && strpos($content, "/start") === 0) {
         }
     } else {
         // /start معمولی بدون پارامتر
-        $text = "سلام $from_name 👋\n\nتو الان توی ربات پیام ناشناس عضو شدی.\n\nبرای ارسال پیام ناشناس به کسی، لینک مخصوص اون رو بزن.\n\nلینک مخصوص تو:\nt.me/$botid?start=$from_id";
+        $text = "سلام $from_name 👋\n\nتو الان توی ربات پیام ناشناس عضو شدی.\n\nبرای ارسال پیام ناشناس به کسی، لینک مخصوص اون رو بزن.\n\n 🔗 لینک من : /link \n 🌐 برای دریافت لینک صفحه ناشناس من : /weblink";
         sendContent($from_id, "text", $text, $keyboard);
         $targetFile = "$pvTargetsDir/pv_target_$from_id.txt";
         if (file_exists($targetFile)) unlink($targetFile);
@@ -461,74 +485,100 @@ if (isset($content) && trim($content) === "/weblink") {
     ensureUserDirectory($from_id, $usersDir);
     $userDir = "$usersDir/$from_id";
 
-    // --- ذخیره آخرین عکس پروفایل کاربر (یا حذف در صورت نبود عکس) ---
+    // ذخیره آخرین عکس پروفایل با try-catch (بدون تغییر)
     try {
         $photosData = json_decode(file_get_contents("https://api.telegram.org/bot$token/getUserProfilePhotos?user_id=$from_id&limit=1"), true);
-        $profilePath = "$userDir/profile.jpg";
         if ($photosData["ok"] && $photosData["result"]["total_count"] > 0) {
             $photoArray = end($photosData["result"]["photos"][0]);
             $file_id = $photoArray["file_id"];
             $fileUrl = getFileLink($file_id);
             if ($fileUrl) {
-                file_put_contents($profilePath, file_get_contents($fileUrl));
-            }
-        } else {
-            // اگر عکس پروفایل وجود ندارد، عکس قبلی را حذف کن
-            if (file_exists($profilePath)) {
-                unlink($profilePath);
+                file_put_contents("$userDir/profile.jpg", file_get_contents($fileUrl));
             }
         }
     } catch (Exception $e) {
-        // نادیده گرفتن خطا
+        // نادیده گرفتن خطا اگر کاربر عکس نداشته باشد
     }
 
-    // ساخت لینک و QR و قرار دادن QR روی تصویر طراحی شده
-    $weblink = "https://hesvm.ir/pv/web.php?id=$from_id";
-
+    // ساخت تصویر QR با پروفایل گرد بالا و QR پایین، ارسال مستقیم و حذف فایل موقت
     // مسیر تصویر طراحی شده
     $designPath = "data/assets/qr.jpg";
-
-    // بارگذاری تصویر طراحی شده
-    if (file_exists($designPath)) {
-        $background = imagecreatefromjpeg($designPath); // اگر PNG بود: imagecreatefrompng
-    } else {
-        // fallback اگر تصویر موجود نبود
-        $background = imagecreatetruecolor(1080, 1080);
+    $background = file_exists($designPath) ? imagecreatefromjpeg($designPath) : imagecreatetruecolor(1080, 1080);
+    if (!file_exists($designPath)) {
         $white = imagecolorallocate($background, 255, 255, 255);
         imagefill($background, 0, 0, $white);
     }
 
+    // بارگذاری تصویر پروفایل کاربر یا fallback
+    $userProfile = "$userDir/profile.jpg";
+    if (!file_exists($userProfile)) {
+        $userProfile = "data/assets/profile.jpg";
+    }
+    $ext = strtolower(pathinfo($userProfile, PATHINFO_EXTENSION));
+    $profileImg = ($ext === "png") ? imagecreatefrompng($userProfile) : imagecreatefromjpeg($userProfile);
+
+    // گرد کردن تصویر پروفایل
+    $profileWidth = imagesx($profileImg);
+    $profileHeight = imagesy($profileImg);
+    $size = min($profileWidth, $profileHeight);
+    $profileCircular = imagecreatetruecolor($size, $size);
+    imagesavealpha($profileCircular, true);
+    $trans_color = imagecolorallocatealpha($profileCircular, 0, 0, 0, 127);
+    imagefill($profileCircular, 0, 0, $trans_color);
+    for ($x = 0; $x < $size; $x++) {
+        for ($y = 0; $y < $size; $y++) {
+            $dx = $x - $size/2;
+            $dy = $y - $size/2;
+            if (($dx*$dx + $dy*$dy) <= ($size/2)*($size/2)) {
+                $color = imagecolorat($profileImg, $x, $y);
+                imagesetpixel($profileCircular, $x, $y, $color);
+            }
+        }
+    }
+
+    // تغییر سایز پروفایل (مثلاً 350px به جای 200px)
+    $finalProfileWidth = 300;
+    $finalProfileHeight = 300;
+    $profileResized = imagecreatetruecolor($finalProfileWidth, $finalProfileHeight);
+    imagesavealpha($profileResized, true);
+    $trans_color = imagecolorallocatealpha($profileResized, 0, 0, 0, 127);
+    imagefill($profileResized, 0, 0, $trans_color);
+    imagecopyresampled($profileResized, $profileCircular, 0, 0, 0, 0, $finalProfileWidth, $finalProfileHeight, $size, $size);
+    imagedestroy($profileCircular);
+
     // تولید QR Code
+    $weblink = "https://hesvm.ir/pv/web.php?id=$from_id";
     $qrUrl = "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=" . urlencode($weblink);
     $qrImage = imagecreatefrompng($qrUrl);
 
-    // اندازه QR و پس‌زمینه
-    $qrWidth = imagesx($qrImage);
-    $qrHeight = imagesy($qrImage);
+    // قرار دادن پروفایل و QR روی تصویر طراحی شده
     $bgWidth = imagesx($background);
     $bgHeight = imagesy($background);
+    $qrWidth = imagesx($qrImage);
+    $qrHeight = imagesy($qrImage);
 
-    // قرار دادن QR در وسط تصویر طراحی شده
-    $destX = ($bgWidth - $qrWidth) / 2;
-    $destY = ($bgHeight - $qrHeight) / 2;
-    imagecopy($background, $qrImage, $destX, $destY, 0, 0, $qrWidth, $qrHeight);
+    // پروفایل وسط تصویر و پایین‌تر (مثلاً Y = 300px به جای 50px)
+    $profileX = ($bgWidth - $finalProfileWidth) / 2;
+    $profileY = 400; // پایین‌تر
+    imagecopy($background, $profileResized, $profileX, $profileY, 0, 0, $finalProfileWidth, $finalProfileHeight);
 
-    // ذخیره تصویر نهایی موقت در فایل temp
+    // QR پایین پروفایل
+    $qrX = ($bgWidth - $qrWidth) / 2;
+    $qrY = $profileY + $finalProfileHeight + 200;
+    imagecopy($background, $qrImage, $qrX, $qrY, 0, 0, $qrWidth, $qrHeight);
+
+    // ذخیره موقت و ارسال
     $tempFile = tempnam(sys_get_temp_dir(), 'qr_') . '.png';
     imagepng($background, $tempFile);
-
-    // آزادسازی حافظه
     imagedestroy($background);
+    imagedestroy($profileResized);
+    imagedestroy($profileImg);
     imagedestroy($qrImage);
 
-    $text = "✨ لینک اختصاصی تو برای دریافت پیام ناشناس از وب:\n\n$weblink\n\nمی‌تونی این لینک رو به دوستات بدی تا برات پیام ناشناس بفرستن. همچنین از طریق این QR هم امکان پذیره:\n";
-
-    // ارسال تصویر نهایی به کاربر با cURL
+    $text = "✨ لینک اختصاصی تو برای دریافت پیام ناشناس:\n\n$weblink";
     sendPhotoFile($from_id, $tempFile);
     sendContent($from_id, "text", $text);
-
-    // حذف فایل موقت
-    if (file_exists($tempFile)) unlink($tempFile);
+    unlink($tempFile);
 
     exit;
 }
@@ -820,19 +870,23 @@ function ensureUserDirectory($user_id, $usersDir)
     createUserDataDirs($userDir);
 }
 
-// ارسال عکس با cURL جهت جلوگیری از خطای 400
-function sendPhotoFile($chat_id, $filePath, $caption = null) {
+// ارسال فایل عکس به صورت مستقیم (برای ارسال فایل موقت QR)
+function sendPhotoFile($chat_id, $file_path, $keyboard = null)
+{
     global $token;
     $url = "https://api.telegram.org/bot$token/sendPhoto";
-    $postFields = ['chat_id' => $chat_id, 'photo' => new CURLFile($filePath)];
-    if ($caption) $postFields['caption'] = $caption;
-
+    $post_fields = [
+        'chat_id' => $chat_id,
+        'photo' => new CURLFile(realpath($file_path))
+    ];
+    if ($keyboard) {
+        $post_fields['reply_markup'] = json_encode($keyboard);
+    }
     $ch = curl_init();
     curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type:multipart/form-data"]);
     curl_setopt($ch, CURLOPT_URL, $url);
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
-    $result = curl_exec($ch);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $post_fields);
+    curl_exec($ch);
     curl_close($ch);
-    return $result;
 }
